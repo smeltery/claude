@@ -22,7 +22,7 @@ npm install -g @anthropic-ai/claude-code
 - `skills/` — Skill definitions (modular, each skill is a directory)
 - `commands/` — Custom slash-command definitions
 - `plans/` — Persistent plans
-- `shared/` — Shared AI config submodule ([dotbrains/shared-ai-config](https://github.com/dotbrains/shared-ai-config))
+- `shared/` — Shared AI config submodule ([smeltery/shared-ai-config](https://github.com/smeltery/shared-ai-config))
 - `frontmatter/` — Claude Code-specific YAML frontmatter for agents and skills
 - `PLUGINS.md` — External MCP servers and plugins ([details](PLUGINS.md))
 - `RULES.md` — Rule definitions and usage ([details](RULES.md))
@@ -58,7 +58,7 @@ npm install -g @anthropic-ai/claude-code
 The contents of this repository should be placed in your `$HOME`.
 
 ```bash
-git clone --recursive https://github.com/dotbrains/claude.git $HOME/.claude
+git clone --recursive https://github.com/smeltery/claude.git $HOME/.claude
 ```
 
 ### Install Plugins
@@ -76,7 +76,7 @@ This installs:
 
 ## Shared Agent Definitions
 
-Agent and skill body content is shared with [OpenCode](https://github.com/dotbrains/opencode) via the [shared-ai-config](https://github.com/dotbrains/shared-ai-config) submodule. To update after shared content changes:
+Agent and skill body content is shared with [OpenCode](https://github.com/smeltery/opencode) via the [shared-ai-config](https://github.com/smeltery/shared-ai-config) submodule. To update after shared content changes:
 
 ```bash
 git submodule update --remote shared
