@@ -1,1 +1,1 @@
-../third-party/agent-skills/agents/code-reviewer.md
+../shared/third-party/agent-skills/agents/code-reviewer.md

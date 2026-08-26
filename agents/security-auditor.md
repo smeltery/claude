@@ -1,1 +1,1 @@
-../third-party/agent-skills/agents/security-auditor.md
+../shared/third-party/agent-skills/agents/security-auditor.md

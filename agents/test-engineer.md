@@ -1,1 +1,1 @@
-../third-party/agent-skills/agents/test-engineer.md
+../shared/third-party/agent-skills/agents/test-engineer.md
