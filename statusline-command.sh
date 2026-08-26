@@ -2,34 +2,59 @@
 
 # Claude Code status line — mirrors Starship/Gruvbox Dark prompt style
 # Receives JSON on stdin from Claude Code
+#
+# Keep this cheap: Claude refreshes often. Prefer .git metadata over
+# working-tree walks. Dirty flags are cached under /tmp (guest-local).
 
 input=$(cat)
 
-# --- Data extraction ---
-cwd=$(echo "$input" | jq -r '.workspace.current_dir // .cwd // ""')
-model=$(echo "$input" | jq -r '.model.display_name // ""')
-used_pct=$(echo "$input" | jq -r '.context_window.used_percentage // empty')
-duration_ms=$(echo "$input" | jq -r '.cost.total_duration_ms // empty')
-cost_usd=$(echo "$input" | jq -r '.cost.total_cost_usd // empty')
+# --- One jq pass ---
+eval "$(echo "$input" | jq -r '
+  @sh "cwd=\(.workspace.current_dir // .cwd // "")",
+  @sh "model=\(.model.display_name // "")",
+  @sh "used_pct=\(.context_window.used_percentage // "")",
+  @sh "duration_ms=\(.cost.total_duration_ms // "")",
+  @sh "cost_usd=\(.cost.total_cost_usd // "")"
+')"
+
 git_branch=""
 git_status=""
 repo_name=""
 
-# --- Repo name + git info (skip optional locks) ---
-if [ -n "$cwd" ] && git -C "$cwd" rev-parse --git-dir --no-optional-locks >/dev/null 2>&1; then
+# --- Repo name + branch (reads .git only) ---
+if [ -n "$cwd" ] && git -C "$cwd" --no-optional-locks rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     toplevel=$(git -C "$cwd" --no-optional-locks rev-parse --show-toplevel 2>/dev/null)
     repo_name=$(basename "${toplevel:-$cwd}")
     git_branch=$(git -C "$cwd" --no-optional-locks symbolic-ref --short HEAD 2>/dev/null \
         || git -C "$cwd" --no-optional-locks rev-parse --short HEAD 2>/dev/null)
-    # Status flags (mirrors Starship git_status: !, +, ?, ↑)
-    flags=""
-    git_st=$(git -C "$cwd" --no-optional-locks status --porcelain 2>/dev/null)
-    echo "$git_st" | grep -qE '^( M|M |MM|AM)' && flags="${flags}!"
-    echo "$git_st" | grep -qE '^(A |MA)' && flags="${flags}+"
-    echo "$git_st" | grep -q '^\?\?' && flags="${flags}?"
-    ahead=$(git -C "$cwd" --no-optional-locks rev-list --count "@{u}..HEAD" 2>/dev/null)
-    [ -n "$ahead" ] && [ "$ahead" -gt 0 ] && flags="${flags}↑${ahead}"
-    [ -n "$flags" ] && git_status="${flags}"
+
+    # Dirty flags / ahead: throttle porcelain + rev-list (working-tree walk)
+    cache_id=$(printf '%s' "${toplevel:-$cwd}" | cksum | awk '{print $1}')
+    cache="/tmp/claude-sl-git.${cache_id}"
+    now=$(date +%s)
+    mtime=$(stat -f %m "$cache" 2>/dev/null || stat -c %Y "$cache" 2>/dev/null || echo 0)
+    if [ -f "$cache" ] && [ $((now - mtime)) -lt 30 ]; then
+        git_status=$(cat "$cache")
+    else
+        mod=""
+        add=""
+        # Skip untracked: monorepo build artifacts make porcelain expensive
+        git_st=$(git -C "$cwd" --no-optional-locks status --porcelain --untracked-files=no 2>/dev/null)
+        while IFS= read -r line || [ -n "$line" ]; do
+            [ -z "$line" ] && continue
+            case "${line:0:2}" in
+                ' M'|'M '|'MM'|'AM') mod='!' ;;
+                'A '|'MA') add='+' ;;
+            esac
+        done <<< "$git_st"
+        flags="${mod}${add}"
+        ahead=$(git -C "$cwd" --no-optional-locks rev-list --count "@{u}..HEAD" 2>/dev/null || true)
+        if [ -n "${ahead:-}" ] && [ "$ahead" -gt 0 ] 2>/dev/null; then
+            flags="${flags}↑${ahead}"
+        fi
+        printf '%s' "$flags" > "$cache"
+        git_status="$flags"
+    fi
 elif [ -n "$cwd" ]; then
     repo_name=$(basename "$cwd")
 fi
