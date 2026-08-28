@@ -3,13 +3,15 @@
 # Claude Code status line — mirrors Starship/Gruvbox Dark prompt style
 # Receives JSON on stdin from Claude Code
 #
-# Keep this cheap: Claude refreshes often. Prefer .git metadata over
-# working-tree walks. Dirty flags are cached under /tmp (guest-local).
+# Keep this cheap: Claude runs it on startup and every UI refresh, including
+# inside hab/terrarium guests where the workspace is a virtiofs/Docker mount.
+# Never walk the working tree (git status/diff) or scan transcripts — those
+# take seconds-to-minutes on monorepos and block the TUI from appearing.
 
 input=$(cat)
 
 # --- One jq pass ---
-eval "$(echo "$input" | jq -r '
+eval "$(printf '%s' "$input" | jq -r '
   @sh "cwd=\(.workspace.current_dir // .cwd // "")",
   @sh "model=\(.model.display_name // "")",
   @sh "used_pct=\(.context_window.used_percentage // "")",
@@ -18,43 +20,27 @@ eval "$(echo "$input" | jq -r '
 ')"
 
 git_branch=""
-git_status=""
 repo_name=""
 
-# --- Repo name + branch (reads .git only) ---
+# --- Repo name + branch (.git metadata only; no working-tree walk) ---
 if [ -n "$cwd" ] && git -C "$cwd" --no-optional-locks rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     toplevel=$(git -C "$cwd" --no-optional-locks rev-parse --show-toplevel 2>/dev/null)
     repo_name=$(basename "${toplevel:-$cwd}")
+    # Prefer TERRARIUM_WS_NAME when the project is bind-mounted at /workspace
+    # (basename would otherwise be the literal mount name).
+    ws="${TERRARIUM_WS:-/workspace}"
+    case "$cwd" in
+        "$ws"|"$ws"/*)
+            if [ -n "${TERRARIUM_WS_NAME:-}" ]; then
+                repo_name="$TERRARIUM_WS_NAME"
+                if [ "$cwd" != "$ws" ]; then
+                    repo_name="$repo_name/${cwd#"$ws"/}"
+                fi
+            fi
+            ;;
+    esac
     git_branch=$(git -C "$cwd" --no-optional-locks symbolic-ref --short HEAD 2>/dev/null \
         || git -C "$cwd" --no-optional-locks rev-parse --short HEAD 2>/dev/null)
-
-    # Dirty flags / ahead: throttle porcelain + rev-list (working-tree walk)
-    cache_id=$(printf '%s' "${toplevel:-$cwd}" | cksum | awk '{print $1}')
-    cache="/tmp/claude-sl-git.${cache_id}"
-    now=$(date +%s)
-    mtime=$(stat -f %m "$cache" 2>/dev/null || stat -c %Y "$cache" 2>/dev/null || echo 0)
-    if [ -f "$cache" ] && [ $((now - mtime)) -lt 30 ]; then
-        git_status=$(cat "$cache")
-    else
-        mod=""
-        add=""
-        # Skip untracked: monorepo build artifacts make porcelain expensive
-        git_st=$(git -C "$cwd" --no-optional-locks status --porcelain --untracked-files=no 2>/dev/null)
-        while IFS= read -r line || [ -n "$line" ]; do
-            [ -z "$line" ] && continue
-            case "${line:0:2}" in
-                ' M'|'M '|'MM'|'AM') mod='!' ;;
-                'A '|'MA') add='+' ;;
-            esac
-        done <<< "$git_st"
-        flags="${mod}${add}"
-        ahead=$(git -C "$cwd" --no-optional-locks rev-list --count "@{u}..HEAD" 2>/dev/null || true)
-        if [ -n "${ahead:-}" ] && [ "$ahead" -gt 0 ] 2>/dev/null; then
-            flags="${flags}↑${ahead}"
-        fi
-        printf '%s' "$flags" > "$cache"
-        git_status="$flags"
-    fi
 elif [ -n "$cwd" ]; then
     repo_name=$(basename "$cwd")
 fi
@@ -77,7 +63,6 @@ format_duration() {
 # --- Gruvbox Dark ANSI colors ---
 YELLOW='\033[38;2;250;189;47m'      # #fabd2f  bright yellow  — repo name
 GREEN='\033[38;2;142;192;124m'      # #8ec07c  bright aqua    — branch
-RED='\033[38;2;251;73;52m'          # #fb4934  bright red     — git status flags
 FG1='\033[38;2;235;219;178m'        # #ebdbb2  fg1            — model name
 FG2='\033[38;2;213;196;161m'        # #d5c4a1  fg2            — session duration
 BLUE='\033[38;2;131;165;152m'       # #83a598  bright blue    — session cost
@@ -87,38 +72,29 @@ BOLD='\033[1m'
 RESET='\033[0m'
 
 # --- Assemble line ---
-# Format: <repo> (<branch>[status])  [<model>]  ctx:<used>%  <duration>  <cost>
+# Format: <repo> (<branch>)  [<model>]  ctx:<used>%  <duration>  <cost>
 parts=""
 
-# Repo + branch
 if [ -n "$repo_name" ]; then
     parts="${parts}${BOLD}${YELLOW}${repo_name}${RESET}"
 fi
 if [ -n "$git_branch" ]; then
-    parts="${parts} ${GRAY}(${GREEN}${git_branch}${RESET}"
-    if [ -n "$git_status" ]; then
-        parts="${parts} ${RED}${git_status}${RESET}"
-    fi
-    parts="${parts}${GRAY})${RESET}"
+    parts="${parts} ${GRAY}(${GREEN}${git_branch}${RESET}${GRAY})${RESET}"
 fi
 
-# Model
 if [ -n "$model" ]; then
     parts="${parts} ${GRAY}[${RESET}${FG1}${model}${RESET}${GRAY}]${RESET}"
 fi
 
-# Context usage
 if [ -n "$used_pct" ]; then
     used_int=$(printf '%.0f' "$used_pct")
     parts="${parts} ${ORANGE}ctx:${used_int}%${RESET}"
 fi
 
-# Session duration
 if [ -n "$duration_ms" ]; then
     parts="${parts} ${FG2}$(format_duration "$duration_ms")${RESET}"
 fi
 
-# Session cost
 if [ -n "$cost_usd" ]; then
     parts="${parts} ${BLUE}\$$(printf '%.2f' "$cost_usd")${RESET}"
 fi
